@@ -97,8 +97,11 @@ graph TD
 If you have [Homebrew](https://brew.sh/) installed, run:
 
 ```bash
-# Due to naming conflicts in the official repo, please install directly using the URL
-brew install --cask https://raw.githubusercontent.com/lbjlaq/Antigravity-Manager/main/distribution/homebrew/antigravity-tools.rb
+# 1. Tap the repository
+brew tap lbjlaq/antigravity-manager https://github.com/lbjlaq/Antigravity-Manager
+
+# 2. Install the app
+brew install --cask antigravity-tools
 # If you encounter permission issues
 brew install --cask --no-quarantine antigravity
 ```
