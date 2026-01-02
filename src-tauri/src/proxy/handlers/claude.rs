@@ -303,7 +303,7 @@ pub async fn handle_messages(
                 format!("[Array with {} blocks]", arr.len())
             }
         };
-        debug!("[{}] Message[{}] - Role: {}, Content: {}", 
+        debug!("[{}] Message[{}] - Role: {}, Content: {}",
             trace_id, idx, msg.role, content_preview);
     }
     
@@ -325,15 +325,62 @@ pub async fn handle_messages(
 
     let mut last_error = String::new();
     let mut retried_without_thinking = false;
-    
+
     for attempt in 0..max_attempts {
         // 3. 模型路由与配置解析 (提前解析以确定请求类型)
-        let mut mapped_model = crate::proxy::common::model_mapping::resolve_model_route(
+        // 【新增】智能降级逻辑：对于 Claude 模型，第一次尝试使用原始模型，失败后才使用映射
+        let is_claude_model = request_for_body.model.starts_with("claude-");
+        let is_first_attempt = attempt == 0;
+
+
+        // 获取映射的模型（如果有）
+        let mapped_model_from_config = crate::proxy::common::model_mapping::resolve_model_route(
             &request_for_body.model,
             &*state.custom_mapping.read().await,
             &*state.openai_mapping.read().await,
             &*state.anthropic_mapping.read().await,
         );
+
+        // 【优化】检查是否有精确的自定义映射
+        let has_custom_mapping = state.custom_mapping.read().await.contains_key(&request_for_body.model);
+
+        // 决定实际使用的模型
+        let mut mapped_model = if has_custom_mapping {
+             // 如果用户配置了精确映射，直接使用映射结果（不优先尝试 Claude）
+             // 这允许用户通过精确映射强制某些模型走 Gemini，节省 Claude 配额
+             tracing::info!(
+                "[{}][Claude] Custom mapping found, respecting override: {} -> {}",
+                trace_id,
+                request_for_body.model,
+                &mapped_model_from_config
+            );
+            mapped_model_from_config.clone()
+        } else if is_claude_model && is_first_attempt {
+            // Claude 模型的第一次尝试（且无精确映射）：使用原始模型
+            tracing::info!(
+                "[{}][Claude] First attempt with original model: {} (fallback mapping available: {} -> {})",
+                trace_id,
+                request_for_body.model,
+                request_for_body.model,
+                &mapped_model_from_config
+            );
+            request_for_body.model.clone()
+        } else if is_claude_model && !is_first_attempt && &mapped_model_from_config != &request_for_body.model {
+            // Claude 模型的重试：如果有映射且不同，使用映射的模型
+            tracing::warn!(
+                "[{}][Claude] Retry attempt {}, falling back to mapped model: {} -> {}",
+                trace_id,
+                attempt + 1,
+                request_for_body.model,
+                &mapped_model_from_config
+            );
+            mapped_model_from_config.clone()
+        } else {
+            // 非 Claude 模型或没有映射：使用正常的映射逻辑
+            mapped_model_from_config.clone()
+        };
+
+
         // 将 Claude 工具转为 Value 数组以便探测联网
         let tools_val: Option<Vec<Value>> = request_for_body.tools.as_ref().map(|list| {
             list.iter().map(|t| serde_json::to_value(t).unwrap_or(json!({}))).collect()
@@ -347,6 +394,7 @@ pub async fn handle_messages(
         let session_id = Some(session_id_str.as_str());
 
         let force_rotate_token = attempt > 0;
+
         let (access_token, project_id, email) = match token_manager.get_token(&config.request_type, force_rotate_token, session_id).await {
             Ok(t) => t,
             Err(e) => {
@@ -368,7 +416,7 @@ pub async fn handle_messages(
             }
         };
 
-        info!("✓ Using account: {} (type: {})", email, config.request_type);
+        info!("[{}] ✓ Using account: {} (type: {})", trace_id, email, config.request_type);
         
         
         // ===== 【优化】后台任务智能检测与降级 =====
@@ -420,6 +468,9 @@ pub async fn handle_messages(
 
         
         request_with_mapped.model = mapped_model;
+
+        // 【调试】打印即将发送的 Claude 请求体
+        debug!("[{}] Claude Request Body (before transform): {}", trace_id, serde_json::to_string_pretty(&request_with_mapped).unwrap_or_default());
 
         // 生成 Trace ID (简单用时间戳后缀)
         // let _trace_id = format!("req_{}", chrono::Utc::now().timestamp_subsec_millis());
@@ -535,16 +586,34 @@ pub async fn handle_messages(
         // 1. 立即提取状态码和 headers（防止 response 被 move）
         let status_code = status.as_u16();
         let retry_after = response.headers().get("Retry-After").and_then(|h| h.to_str().ok()).map(|s| s.to_string());
-        
+
         // 2. 获取错误文本并转移 Response 所有权
         let error_text = response.text().await.unwrap_or_else(|_| format!("HTTP {}", status));
         last_error = format!("HTTP {}: {}", status_code, error_text);
         debug!("[{}] Upstream Error Response: {}", trace_id, error_text);
         
+        let status_code = status.as_u16();
+
+        // Handle transient 429s using upstream-provided retry delay (avoid surfacing errors to clients).
+        // 【新增】Claude 降级：如果是首次尝试 Claude 原模型失败，且有映射方案，强制重试（触发降级）
+        if status_code == 429 && is_claude_model && is_first_attempt && &mapped_model_from_config != &request_for_body.model {
+             tracing::warn!(
+                "[{}][Claude] Quota exhausted for {}, immediately falling back to {} for next attempt | Account: {}",
+                trace_id,
+                request_for_body.model,
+                &mapped_model_from_config,
+                email
+            );
+            // 这里不需要 sleep 太久，因为是换模型/换路径，不是等待原资源恢复
+            sleep(Duration::from_millis(200)).await;
+            continue;
+        }
+
         // 3. 标记限流状态（用于 UI 显示）
         if status_code == 429 || status_code == 529 || status_code == 503 || status_code == 500 {
             token_manager.mark_rate_limited(&email, status_code, retry_after.as_deref(), &error_text);
         }
+
 
         // 4. 处理 400 错误 (Thinking 签名失效)
         if status_code == 400
@@ -560,14 +629,14 @@ pub async fn handle_messages(
 
             // 移除 thinking 配置
             request_for_body.thinking = None;
-            
+
             // 清理历史消息中的 Thinking Block
             for msg in request_for_body.messages.iter_mut() {
                 if let crate::proxy::mappers::claude::models::MessageContent::Array(blocks) = &mut msg.content {
                     blocks.retain(|b| !matches!(b, crate::proxy::mappers::claude::models::ContentBlock::Thinking { .. }));
                 }
             }
-            
+
             // 清理模型名中的 -thinking 后缀
             if request_for_body.model.contains("claude-") {
                 let mut m = request_for_body.model.clone();
@@ -579,7 +648,7 @@ pub async fn handle_messages(
                 }
                 request_for_body.model = m;
             }
-            
+
             // 使用统一退避策略
             let strategy = determine_retry_strategy(status_code, &error_text, retried_without_thinking);
             if apply_retry_strategy(strategy, attempt, status_code, &trace_id).await {
@@ -590,13 +659,15 @@ pub async fn handle_messages(
         // 5. 统一处理所有可重试错误
         // 特殊处理：QUOTA_EXHAUSTED 不重试，直接返回保护账号池
         if status_code == 429 && error_text.contains("QUOTA_EXHAUSTED") {
-            error!("[{}] Quota exhausted (429) on attempt {}/{}, stopping to protect pool.", trace_id, attempt + 1, max_attempts);
-            return (status, error_text).into_response();
-        }
-        
-        // 确定重试策略
+            error!("[{}] Quota exhausted (429) on attempt {}/{}, stopping to protect pool.", trace_id,attempt + 1, max_attempts);
+                return (status, error_text).into_response();
+            }
+
+            tracing::warn!("[{}] Claude Upstream {} on attempt {}/{}, will rotate account on next attempt | Account: {}", trace_id, status, attempt + 1, max_attempts, email);
+
+            // 确定重试策略
         let strategy = determine_retry_strategy(status_code, &error_text, retried_without_thinking);
-        
+
         // 执行退避
         if apply_retry_strategy(strategy, attempt, status_code, &trace_id).await {
             // 判断是否需要轮换账号

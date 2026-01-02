@@ -29,6 +29,9 @@ pub struct Account {
     pub proxy_disabled_at: Option<i64>,
     pub created_at: i64,
     pub last_used: i64,
+    /// 最低配额限额（百分比 0-100），达到或低于此值时自动切换账号
+    #[serde(default)]
+    pub min_quota_threshold: Option<i32>,
 }
 
 impl Account {
@@ -48,6 +51,7 @@ impl Account {
             proxy_disabled_at: None,
             created_at: now,
             last_used: now,
+            min_quota_threshold: None,
         }
     }
 

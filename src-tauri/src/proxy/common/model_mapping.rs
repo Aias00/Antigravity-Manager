@@ -155,8 +155,10 @@ pub fn resolve_model_route(
 ) -> String {
     // 1. 检查自定义精确映射 (优先级最高)
     if let Some(target) = custom_mapping.get(original_model) {
-        crate::modules::logger::log_info(&format!("[Router] 使用自定义精确映射: {} -> {}", original_model, target));
-        return target.clone();
+        if !target.is_empty() {
+            crate::modules::logger::log_info(&format!("[Router] 使用自定义精确映射: {} -> {}", original_model, target));
+            return target.clone();
+        }
     }
 
     let lower_model = original_model.to_lowercase();
@@ -166,16 +168,20 @@ pub fn resolve_model_route(
     if (lower_model.starts_with("gpt-4") && !lower_model.contains("o") && !lower_model.contains("mini") && !lower_model.contains("turbo")) || 
        lower_model.starts_with("o1-") || lower_model.starts_with("o3-") || lower_model == "gpt-4" {
         if let Some(target) = openai_mapping.get("gpt-4-series") {
-            crate::modules::logger::log_info(&format!("[Router] 使用 GPT-4 系列映射: {} -> {}", original_model, target));
-            return target.clone();
+            if !target.is_empty() {
+                crate::modules::logger::log_info(&format!("[Router] 使用 GPT-4 系列映射: {} -> {}", original_model, target));
+                return target.clone();
+            }
         }
     }
     
     // GPT-4o / 3.5 系列 (均衡与轻量, 含 4o, mini, turbo)
     if lower_model.contains("4o") || lower_model.starts_with("gpt-3.5") || (lower_model.contains("mini") && !lower_model.contains("gemini")) || lower_model.contains("turbo") {
         if let Some(target) = openai_mapping.get("gpt-4o-series") {
-            crate::modules::logger::log_info(&format!("[Router] 使用 GPT-4o/3.5 系列映射: {} -> {}", original_model, target));
-            return target.clone();
+            if !target.is_empty() {
+                crate::modules::logger::log_info(&format!("[Router] 使用 GPT-4o/3.5 系列映射: {} -> {}", original_model, target));
+                return target.clone();
+            }
         }
     }
 
@@ -183,12 +189,16 @@ pub fn resolve_model_route(
     if lower_model.starts_with("gpt-5") {
         // 优先使用 gpt-5-series 映射，如果没有则使用 gpt-4-series
         if let Some(target) = openai_mapping.get("gpt-5-series") {
-            crate::modules::logger::log_info(&format!("[Router] 使用 GPT-5 系列映射: {} -> {}", original_model, target));
-            return target.clone();
+            if !target.is_empty() {
+                crate::modules::logger::log_info(&format!("[Router] 使用 GPT-5 系列映射: {} -> {}", original_model, target));
+                return target.clone();
+            }
         }
         if let Some(target) = openai_mapping.get("gpt-4-series") {
-            crate::modules::logger::log_info(&format!("[Router] 使用 GPT-4 系列映射 (GPT-5 fallback): {} -> {}", original_model, target));
-            return target.clone();
+            if !target.is_empty() {
+                crate::modules::logger::log_info(&format!("[Router] 使用 GPT-4 系列映射 (GPT-5 fallback): {} -> {}", original_model, target));
+                return target.clone();
+            }
         }
     }
 
@@ -203,13 +213,17 @@ pub fn resolve_model_route(
         };
 
         if let Some(target) = anthropic_mapping.get(family_key) {
-            crate::modules::logger::log_warn(&format!("[Router] 使用 Anthropic 系列映射: {} -> {}", original_model, target));
-            return target.clone();
+            if !target.is_empty() {
+                crate::modules::logger::log_warn(&format!("[Router] 使用 Anthropic 系列映射: {} -> {}", original_model, target));
+                return target.clone();
+            }
         }
         
         // 兜底兼容旧版精确映射
         if let Some(target) = anthropic_mapping.get(original_model) {
-             return target.clone();
+            if !target.is_empty() {
+                return target.clone();
+            }
         }
     }
 

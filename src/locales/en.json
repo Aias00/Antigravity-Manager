@@ -91,6 +91,9 @@
         "reset_time": "Reset Time",
         "switch_to": "Switch to this account",
         "actions": "Actions",
+        "threshold_settings": "Quota Switching Threshold",
+        "threshold_active": "Stop routing requests when quota is below {{value}}%",
+        "threshold_disabled": "No threshold set (Use until exhausted)",
         "details": {
             "title": "Quota Details"
         },

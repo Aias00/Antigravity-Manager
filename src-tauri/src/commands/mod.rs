@@ -162,17 +162,22 @@ pub async fn fetch_account_quota(
     modules::logger::log_info(&format!("手动刷新配额请求: {}", account_id));
     let mut account =
         modules::load_account(&account_id).map_err(crate::error::AppError::Account)?;
-
     // 使用带重试的查询 (Shared logic)
     let quota = modules::account::fetch_quota_with_retry(&mut account).await?;
 
     // 4. 更新账号配额
     modules::update_account_quota(&account_id, quota.clone())
         .map_err(crate::error::AppError::Account)?;
-
     crate::modules::tray::update_tray_menus(&app);
 
     Ok(quota)
+}
+
+/// 更新账号最低配额阈值
+#[tauri::command]
+pub async fn update_account_threshold(account_id: String, threshold: Option<i32>) -> Result<(), String> {
+    modules::logger::log_info(&format!("更新配额阈值: {} -> {:?}", account_id, threshold));
+    modules::update_account_threshold(&account_id, threshold)
 }
 
 #[derive(serde::Serialize)]

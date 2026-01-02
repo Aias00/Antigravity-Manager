@@ -19,6 +19,8 @@ pub struct ProxyToken {
     pub account_path: PathBuf,  // 账号文件路径，用于更新
     pub project_id: Option<String>,
     pub subscription_tier: Option<String>, // "FREE" | "PRO" | "ULTRA"
+    pub min_quota_threshold: Option<i32>,  // 最低配额阈值
+    pub quota: Option<serde_json::Value>,  // 配额数据
 }
 
 pub struct TokenManager {
@@ -60,7 +62,7 @@ impl TokenManager {
             let mut last_used = self.last_used_account.lock().await;
             *last_used = None;
         }
-        
+
         let entries = std::fs::read_dir(&accounts_dir)
             .map_err(|e| format!("读取账号目录失败: {}", e))?;
         
@@ -157,13 +159,22 @@ impl TokenManager {
         let project_id = token_obj.get("project_id")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
-        
+
         // 【新增】提取订阅等级 (subscription_tier 为 "FREE" | "PRO" | "ULTRA")
         let subscription_tier = account.get("quota")
             .and_then(|q| q.get("subscription_tier"))
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
-        
+
+
+        // 加载最低配额阈值（可选）
+        let min_quota_threshold = account.get("min_quota_threshold")
+            .and_then(|v| v.as_i64())
+            .map(|v| v as i32);
+
+        // 加载配额数据（可选）
+        let quota = account.get("quota").cloned();
+
         Ok(Some(ProxyToken {
             account_id,
             access_token,
@@ -174,6 +185,8 @@ impl TokenManager {
             account_path: path.clone(),
             project_id,
             subscription_tier,
+            min_quota_threshold,
+            quota,
         }))
     }
     
@@ -212,7 +225,7 @@ impl TokenManager {
 
             // ===== 【核心】粘性会话与智能调度逻辑 =====
             let mut target_token: Option<ProxyToken> = None;
-            
+
             // 模式 A: 粘性会话处理 (CacheFirst 或 Balance 且有 session_id)
             if !rotate && session_id.is_some() && scheduling.mode != SchedulingMode::PerformanceFirst {
                 let sid = session_id.unwrap();
@@ -240,8 +253,14 @@ impl TokenManager {
                     } else if !attempted.contains(&bound_id) {
                         // 3. 账号可用且未被标记为尝试失败，优先复用
                         if let Some(found) = tokens_snapshot.iter().find(|t| t.account_id == bound_id) {
-                            tracing::debug!("Sticky Session: Successfully reusing bound account {} for session {}", found.email, sid);
-                            target_token = Some(found.clone());
+                            // 【新增】检查配额是否低于阈值
+                            if !self.is_quota_below_threshold(found, quota_group) {
+                                tracing::debug!("Sticky Session: Successfully reusing bound account {} for session {}", found.email, sid);
+                                target_token = Some(found.clone());
+                            } else {
+                                tracing::debug!("Sticky Session: Bound account {} quota below threshold, will switch", found.email);
+                                self.session_accounts.remove(sid);
+                            }
                         }
                     }
                 }
@@ -250,7 +269,7 @@ impl TokenManager {
             // 模式 B: 原子化 60s 全局锁定 (针对无 session_id 情况的默认保护)
             if target_token.is_none() && !rotate && quota_group != "image_gen" {
                 let mut last_used = self.last_used_account.lock().await;
-                
+
                 // 尝试复用全局锁定账号
                 if let Some((account_id, last_time)) = &*last_used {
                     if last_time.elapsed().as_secs() < 60 && !attempted.contains(account_id) {
@@ -260,7 +279,7 @@ impl TokenManager {
                         }
                     }
                 }
-                
+
                 // 若无锁定，则轮询选择新账号
                 if target_token.is_none() {
                     let start_idx = self.current_index.fetch_add(1, Ordering::SeqCst) % total;
@@ -273,6 +292,11 @@ impl TokenManager {
 
                         // 【新增】主动避开限流或 5xx 锁定的账号 (来自 PR #28 的高可用思路)
                         if self.is_rate_limited(&candidate.account_id) {
+                            continue;
+                        }
+
+                        // 【新增】检查配额是否低于阈值
+                        if self.is_quota_below_threshold(candidate, quota_group) {
                             continue;
                         }
 
@@ -304,15 +328,21 @@ impl TokenManager {
                         continue;
                     }
 
+                    // 【新增】检查配额是否低于阈值
+                    if self.is_quota_below_threshold(candidate, quota_group) {
+                        continue;
+                    }
+
                     target_token = Some(candidate.clone());
-                    
+
                     if rotate {
                         tracing::debug!("Force Rotation: Switched to account: {}", candidate.email);
                     }
                     break;
                 }
             }
-            
+
+            // 3. 检查 token 是否过期（提前5分钟刷新）
             let mut token = match target_token {
                 Some(t) => t,
                 None => {
@@ -326,8 +356,6 @@ impl TokenManager {
                 }
             };
 
-        
-            // 3. 检查 token 是否过期（提前5分钟刷新）
             let now = chrono::Utc::now().timestamp();
             if now >= token.timestamp - 300 {
                 tracing::debug!("账号 {} 的 token 即将过期，正在刷新...", token.email);
@@ -555,6 +583,53 @@ impl TokenManager {
     /// 清除所有会话的粘性映射
     pub fn clear_all_sessions(&self) {
         self.session_accounts.clear();
+    }
+
+    /// 检查账号的配额是否低于阈值
+    /// 返回 true 表示配额低于阈值，应该跳过该账号
+    fn is_quota_below_threshold(&self, token: &ProxyToken, _quota_group: &str) -> bool {
+        // 如果没有设置阈值，不限制
+        let threshold = match token.min_quota_threshold {
+            Some(t) => t,
+            None => return false,
+        };
+
+        // 如果没有配额数据，无法判断，允许使用
+        let quota_data = match &token.quota {
+            Some(q) => q,
+            None => return false,
+        };
+
+        // 检查配额数据中是否有 Claude 模型，并提取配额百分比
+        let current_quota_percent = quota_data.get("models")
+            .and_then(|m| m.as_object())
+            .and_then(|models| {
+                // 遍历所有模型，找到 Claude 相关的
+                for (model_name, model_data) in models {
+                    if model_name.contains("claude") {
+                        if let Some(percent) = model_data.get("quota_percent").and_then(|v| v.as_i64()) {
+                            return Some(percent as i32);
+                        }
+                    }
+                }
+                None
+            });
+
+        match current_quota_percent {
+            Some(current) => {
+                let below_threshold = current < threshold;
+                if below_threshold {
+                    tracing::warn!(
+                        "Account {} Claude quota ({}%) is below threshold ({}%), skipping",
+                        token.email,
+                        current,
+                        threshold
+                    );
+                }
+                below_threshold
+            }
+            None => false, // 无法获取配额信息，允许使用
+        }
     }
 }
 

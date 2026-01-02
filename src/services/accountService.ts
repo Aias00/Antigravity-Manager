@@ -38,6 +38,10 @@ export async function fetchAccountQuota(accountId: string): Promise<QuotaData> {
     return await invoke('fetch_account_quota', { accountId });
 }
 
+export async function updateAccountThreshold(accountId: string, threshold: number | null): Promise<void> {
+    return await invoke('update_account_threshold', { accountId, threshold });
+}
+
 export interface RefreshStats {
     total: number;
     success: number;

@@ -102,6 +102,7 @@ pub struct ZaiConfig {
     pub mcp: ZaiMcpConfig,
 }
 
+
 impl Default for ZaiConfig {
     fn default() -> Self {
         Self {

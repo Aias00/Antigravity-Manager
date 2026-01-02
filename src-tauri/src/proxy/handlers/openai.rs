@@ -69,7 +69,6 @@ pub async fn handle_chat_completions(
         let session_id = SessionManager::extract_openai_session_id(&openai_req);
 
         // 4. 获取 Token (使用准确的 request_type)
-        // 关键：在重试尝试 (attempt > 0) 时强制轮换账号
         let (access_token, project_id, email) = match token_manager
             .get_token(&config.request_type, attempt > 0, Some(&session_id))
             .await
@@ -197,7 +196,7 @@ pub async fn handle_chat_completions(
 
             // 3. 其他限流或服务器过载情况，轮换账号
             tracing::warn!(
-                "OpenAI Upstream {} on {} attempt {}/{}, rotating account",
+                "OpenAI Upstream {} on {} attempt {}/{}, will rotate account on next attempt",
                 status_code,
                 email,
                 attempt + 1,
@@ -209,7 +208,7 @@ pub async fn handle_chat_completions(
         // 只有 403 (权限/地区限制) 和 401 (认证失效) 触发账号轮换
         if status_code == 403 || status_code == 401 {
             tracing::warn!(
-                "OpenAI Upstream {} on account {} attempt {}/{}, rotating account",
+                "OpenAI Upstream {} on account {} attempt {}/{}, will rotate account on next attempt",
                 status_code,
                 email,
                 attempt + 1,

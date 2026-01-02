@@ -6,7 +6,7 @@ use tracing::{debug, error, info};
 use crate::proxy::mappers::gemini::{wrap_request, unwrap_response};
 use crate::proxy::server::AppState;
 use crate::proxy::session_manager::SessionManager;
- 
+
 const MAX_RETRY_ATTEMPTS: usize = 3;
  
 /// 处理 generateContent 和 streamGenerateContent
@@ -62,7 +62,6 @@ pub async fn handle_generate(
 
         let config = crate::proxy::mappers::common_utils::resolve_request_config(&model_name, &mapped_model, &tools_val);
 
-        // 4. 获取 Token (使用准确的 request_type)
         // 提取 SessionId (粘性指纹)
         let session_id = SessionManager::extract_gemini_session_id(&body, &model_name);
 
@@ -195,7 +194,7 @@ pub async fn handle_generate(
                 return Err((status, error_text));
             }
 
-            tracing::warn!("Gemini Upstream {} on account {} attempt {}/{}, rotating account", status_code, email, attempt + 1, max_attempts);
+            tracing::warn!("Gemini Upstream {} on account {} attempt {}/{}, will rotate account on next attempt", status_code, email, attempt + 1, max_attempts);
             continue;
         }
  

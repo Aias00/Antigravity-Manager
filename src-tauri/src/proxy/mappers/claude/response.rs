@@ -55,12 +55,10 @@ impl NonStreamingProcessor {
         self.flush_text();
 
         // 处理 trailingSignature (空 text 带签名)
-        if let Some(signature) = self.trailing_signature.take() {
-            self.content_blocks.push(ContentBlock::Thinking {
-                thinking: String::new(),
-                signature: Some(signature),
-                cache_control: None,
-            });
+        // 注意：不创建空的 thinking 块，因为会导致 API 验证错误
+        if let Some(_signature) = self.trailing_signature.take() {
+            // 忽略空的 thinking 签名，避免 "thinking.thinking: Field required" 错误
+            tracing::debug!("Ignoring empty thinking signature to avoid API validation error");
         }
 
         // 构建响应
@@ -77,12 +75,9 @@ impl NonStreamingProcessor {
             self.flush_text();
 
             // 处理 trailingSignature (B4/C3 场景)
-            if let Some(trailing_sig) = self.trailing_signature.take() {
-                self.content_blocks.push(ContentBlock::Thinking {
-                    thinking: String::new(),
-                    signature: Some(trailing_sig),
-                    cache_control: None,
-                });
+            // 注意：不创建空的 thinking 块
+            if let Some(_trailing_sig) = self.trailing_signature.take() {
+                tracing::debug!("Ignoring empty thinking signature before tool call");
             }
 
             self.has_tool_call = true;
@@ -120,13 +115,9 @@ impl NonStreamingProcessor {
                 self.flush_text();
 
                 // 处理 trailingSignature
-                if let Some(trailing_sig) = self.trailing_signature.take() {
+                if let Some(_trailing_sig) = self.trailing_signature.take() {
                     self.flush_thinking();
-                    self.content_blocks.push(ContentBlock::Thinking {
-                        thinking: String::new(),
-                        signature: Some(trailing_sig),
-                        cache_control: None,
-                    });
+                    tracing::debug!("Ignoring empty thinking signature before thinking content");
                 }
 
                 self.thinking_builder.push_str(text);
@@ -146,25 +137,17 @@ impl NonStreamingProcessor {
                 self.flush_thinking();
 
                 // 处理之前的 trailingSignature
-                if let Some(trailing_sig) = self.trailing_signature.take() {
+                if let Some(_trailing_sig) = self.trailing_signature.take() {
                     self.flush_text();
-                    self.content_blocks.push(ContentBlock::Thinking {
-                        thinking: String::new(),
-                        signature: Some(trailing_sig),
-                        cache_control: None,
-                    });
+                    tracing::debug!("Ignoring empty thinking signature before text content");
                 }
 
                 self.text_builder.push_str(text);
 
-                // 非空 text 带签名 - 立即刷新并输出空 thinking 块
-                if let Some(sig) = signature {
+                // 非空 text 带签名 - 忽略签名，避免创建空 thinking 块
+                if let Some(_sig) = signature {
                     self.flush_text();
-                    self.content_blocks.push(ContentBlock::Thinking {
-                        thinking: String::new(),
-                        signature: Some(sig),
-                        cache_control: None,
-                    });
+                    tracing::debug!("Ignoring thinking signature on non-empty text to avoid empty thinking block");
                 }
             }
         }

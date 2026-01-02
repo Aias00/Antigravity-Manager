@@ -17,7 +17,7 @@ interface AccountState {
     switchAccount: (accountId: string) => Promise<void>;
     refreshQuota: (accountId: string) => Promise<void>;
     refreshAllQuotas: () => Promise<accountService.RefreshStats>;
-    reorderAccounts: (accountIds: string[]) => Promise<void>;
+    updateThreshold: (accountId: string, threshold: number | null) => Promise<void>;
 
     // 新增 actions
     startOAuthLogin: () => Promise<void>;
@@ -133,6 +133,16 @@ export const useAccountStore = create<AccountState>((set, get) => ({
             return stats;
         } catch (error) {
             set({ error: String(error), loading: false });
+            throw error;
+        }
+    },
+
+    updateThreshold: async (accountId: string, threshold: number | null) => {
+        try {
+            await accountService.updateAccountThreshold(accountId, threshold);
+            await get().fetchAccounts();
+        } catch (error) {
+            console.error('[Store] Update threshold failed:', error);
             throw error;
         }
     },

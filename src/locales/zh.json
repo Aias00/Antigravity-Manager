@@ -96,6 +96,9 @@
         "reset_time": "重置时间",
         "switch_to": "切换到此账号",
         "actions": "操作",
+        "threshold_settings": "账号配额切换阈值",
+        "threshold_active": "配额低于 {{value}}% 时自动停止分配请求",
+        "threshold_disabled": "未设置阈值 (将一直使用到配额耗尽)",
         "details": {
             "title": "配额详情"
         },

@@ -456,6 +456,13 @@ pub fn update_account_quota(account_id: &str, quota: QuotaData) -> Result<(), St
     save_account(&account)
 }
 
+/// 更新账号最低配额阈值
+pub fn update_account_threshold(account_id: &str, threshold: Option<i32>) -> Result<(), String> {
+    let mut account = load_account(account_id)?;
+    account.min_quota_threshold = threshold;
+    save_account(&account)
+}
+
 /// 导出所有账号的 refresh_token
 #[allow(dead_code)]
 pub fn export_accounts() -> Result<Vec<(String, String)>, String> {

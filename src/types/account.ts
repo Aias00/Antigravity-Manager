@@ -12,6 +12,7 @@ export interface Account {
     proxy_disabled_at?: number;
     created_at: number;
     last_used: number;
+    min_quota_threshold?: number; // 最低配额阈值 (0-100)
 }
 
 export interface TokenData {
